@@ -364,8 +364,10 @@ class HyperbolicMF:
                 weights = None
             self.update_U_row(self.U, inter, weights, users, items, learning_rate)
             self.update_V_row(self.V, inter, weights, items, users, learning_rate)
-            # loss = self.compute_loss(sampler.interactions, sampler.data, 1000).get()
-            iterator.set_description(f'Iteration: {it + 1} \t U grad norm: {float(self.U_grad_norm):.4f} \t V grad norm: {float(self.V_grad_norm):.4f}')
+            if it % 100 == 0:
+                loss, U_term, V_term = self.compute_loss(sampler.interactions, sampler.data, 5000)#.get()
+                iterator.set_description(f'Iteration: {it + 1} \t Loss: {float(loss):.4f} \t U term: {float(U_term):.4f} \t V term: {float(V_term):.4f}')
+            # iterator.set_description(f'Iteration: {it + 1} \t U grad norm: {float(self.U_grad_norm):.4f} \t V grad norm: {float(self.V_grad_norm):.4f}')
             U_norms.append(self.U_grad_norm)
             V_norms.append(self.V_grad_norm)
             self.flush_grad_norms()
