@@ -23,8 +23,9 @@ class HyperbolicMF:
 
     def predict(self, user_index, item_index):
         prod = self.compute_lorentzian_distance(user_index, item_index)
-        # print(prod.shape)
         exp_prod = self.backend.exp(-prod)
+        # print(exp_prod.min())
+        # print(self.backend.isnan(exp_prod).sum())
         return exp_prod / (1 + exp_prod)
 
     def add_unknown_user(self, user_relations, weights, n_iters, lr, batch_size, stop_criterion=1e-4):
@@ -36,6 +37,7 @@ class HyperbolicMF:
             for i in range(U_n_batches):
                 indexes = self.backend.arange(i * batch_size, min(n_new_users, (i+1) * batch_size))
                 self.update_U_row(user_vectors, user_relations, weights, indexes, -1, lr)
+                # print('Pass')
             U_norms.append(self.U_grad_norm)
             self.flush_grad_norms()
             if U_norms[-1] < stop_criterion:
@@ -100,9 +102,9 @@ class HyperbolicMF:
             origin = origin.reshape((1, origin.shape[0]))
         mask = self.backend.ones(origin.shape)
         mask[:, -1] = -1
-        print(self.backend.linalg.norm((grad * origin * mask).sum(axis=1, keepdims=True) ))
-        print(self.backend.linalg.norm(origin))
-        print(self.backend.linalg.norm(grad))
+        # print('\t', (grad * origin * mask).sum(axis=1, keepdims=True))
+        # print('\t', self.backend.linalg.norm(origin))
+        # print('\t', self.backend.linalg.norm(grad))
         return grad + (grad * origin * mask).sum(axis=1, keepdims=True) * origin
 
     def update_U_row(self, U_matrix, relations, weights, row_ind, col_ind, lr):
@@ -115,6 +117,7 @@ class HyperbolicMF:
         a_U = 1 / (2 * self.sigma_U ** 2)
         # U_grad = self.backend.zeros((len(row_ind), d + 1))
         p = self.predict(row_ind, col_ind)
+        assert not self.backend.any(self.backend.isnan(p))
 
         if weights is not None:
             if all_cols:
@@ -132,18 +135,49 @@ class HyperbolicMF:
                 weighted_diff = p - relations[row_ind, col_ind]
 
         # U_grad[:, :-1] = 2 * weighted_diff @ self.V[col_ind, :-1]
-        U_grad = 2 * weighted_diff @ self.V[col_ind, :] + 2 * U_matrix[row_ind, :] # L2 regularization
+        assert not self.backend.any(self.backend.isnan(self.V[col_ind, :]))
+        assert not self.backend.any(self.backend.isnan(weighted_diff))
+        U_grad = 2 * weighted_diff @ self.V[col_ind, :]# + 2 * U_matrix[row_ind, :] # L2 regularization
+        assert not self.backend.any(self.backend.isnan(U_grad))
+        assert not self.backend.any(self.backend.isinf(U_grad))
+        try:
+            assert not self.backend.any(self.backend.isnan(U_matrix[row_ind, :]))
+            assert not self.backend.any(self.backend.isinf(U_matrix[row_ind, :]))
+        except:
+            print(row_ind)
+            print(U_matrix[row_ind, -1])
+            raise Exception()
+
         u_d_plus = self.backend.maximum(U_matrix[row_ind, -1], self.backend.ones_like(U_matrix[row_ind, -1]) + self.op_C)
-        # U_grad[U_matrix[row_ind, -1] > 1, -1] = 2 * weighted_diff @ self.V[:, -1] - 
-        # U_grad[:, -1] += 2 * weighted_diff @ self.V[col_ind, -1]
+        
         U_grad[:, -1] -= 2 * a_U * self.backend.arccosh(u_d_plus) / (self.backend.sqrt(u_d_plus ** 2 - 1) + self.op_C)
+
+        try:
+            assert not self.backend.any(self.backend.isnan(u_d_plus))
+            assert not self.backend.any(self.backend.isinf(u_d_plus))
+            assert not self.backend.any(self.backend.isnan(U_grad))
+            assert not self.backend.any(self.backend.isinf(U_grad))
+        except:
+            print(u_d_plus.min(), u_d_plus.max())
+            raise Exception()
+
         U_grad[:, -1] -= (d - 1) * (u_d_plus * self.backend.arccosh(u_d_plus) - self.backend.sqrt(u_d_plus ** 2 - 1)) / ((u_d_plus ** 2 - 1) * self.backend.arccosh(u_d_plus) + self.op_C)
-        # print(self.backend.linalg.norm(U_grad))
+
+        try:
+            assert not self.backend.any(self.backend.isnan(U_grad))
+            assert not self.backend.any(self.backend.isinf(U_grad))
+        except:
+            print(u_d_plus.min(), u_d_plus.max())
+            raise Exception()
+
         U_grad = self.project_gradient_onto_tangent_space(U_grad, U_matrix[row_ind, :])
-        # print(self.backend.linalg.norm(U_grad))
+        assert not self.backend.any(self.backend.isnan(U_grad))
+        assert not self.backend.any(self.backend.isinf(U_grad))
+
         U_grad = self.exp_mu(U_matrix[row_ind, :], -lr * U_grad)
-        # print(self.backend.linalg.norm(U_grad))
-        print('-' * 100)
+        assert not self.backend.any(self.backend.isnan(U_grad))
+        assert not self.backend.any(self.backend.isinf(U_grad))
+
         self.U_grad_norm += self.backend.linalg.norm(U_matrix[row_ind, :] - U_grad).get()
         U_matrix[row_ind, :] = U_grad
 
@@ -173,13 +207,34 @@ class HyperbolicMF:
             else:
                 weighted_diff = p - relations[col_ind, row_ind]
 
-        V_grad = 2 * weighted_diff.T @ self.U[col_ind, :] + 2 * V_matrix[row_ind, :] # L2 regularization
+        assert not self.backend.any(self.backend.isnan(self.U[col_ind, :]))
+        V_grad = 2 * weighted_diff.T @ self.U[col_ind, :]# + 2 * V_matrix[row_ind, :] # L2 regularization
+        assert not self.backend.any(self.backend.isnan(V_grad))
+        assert not self.backend.any(self.backend.isinf(V_grad))
+        assert not self.backend.any(self.backend.isnan(V_matrix[row_ind, :]))
+        assert not self.backend.any(self.backend.isinf(V_matrix[row_ind, :]))
         # print(self.backend.linalg.norm(V_grad))
         v_d_plus = self.backend.maximum(V_matrix[row_ind, -1], self.backend.ones_like(V_matrix[row_ind, -1]) + self.op_C)
+
         V_grad[:, -1] -= 2 * a_V * self.backend.arccosh(v_d_plus) / (self.backend.sqrt(v_d_plus ** 2 - 1) + self.op_C)
+        try:
+            assert not self.backend.any(self.backend.isnan(V_grad))
+            assert not self.backend.any(self.backend.isinf(V_grad))
+        except:
+            print(v_d_plus.min(), v_d_plus.max())
+            raise Exception()
         V_grad[:, -1] -= (d - 1) * (v_d_plus * self.backend.arccosh(v_d_plus) - self.backend.sqrt(v_d_plus ** 2 - 1)) / ((v_d_plus ** 2 - 1) * self.backend.arccosh(v_d_plus) + self.op_C)
+        assert not self.backend.any(self.backend.isnan(V_grad))
+        assert not self.backend.any(self.backend.isinf(V_grad))
+
         V_grad = self.project_gradient_onto_tangent_space(V_grad, V_matrix[row_ind, :])
+        assert not self.backend.any(self.backend.isnan(V_grad))
+        assert not self.backend.any(self.backend.isinf(V_grad))
+        # print(self.backend.linalg.norm(V_grad[:, :-1]), self.backend.linalg.norm(V_grad[:, -1]))
+        # print(self.backend.linalg.norm(V_matrix[row_ind, :]))
         V_grad = self.exp_mu(V_matrix[row_ind, :], -lr * V_grad)
+        assert not self.backend.any(self.backend.isnan(V_grad))
+        assert not self.backend.any(self.backend.isinf(V_grad))
         self.V_grad_norm += self.backend.linalg.norm(V_matrix[row_ind, :] - V_grad).get()
         V_matrix[row_ind, :] = V_grad
 
@@ -212,8 +267,8 @@ class HyperbolicMF:
         U_term = a_U * U_last_arccosh**2 + (d - 1) * self.backend.log(self.backend.sqrt(U_last**2 - 1) / U_last_arccosh)
         V_term = a_V * V_last_arccosh**2 + (d - 1) * self.backend.log(self.backend.sqrt(V_last**2 - 1) / V_last_arccosh)
         # print(loss, U_term.sum(), V_term.sum())
-        loss += U_term.sum() + V_term.sum()
-        return loss
+        # loss += U_term.sum() + V_term.sum()
+        return loss, U_term.sum(), V_term.sum()
 
     def compute_lorentzian_distance(self, user_inds, item_inds):
         U = self.U[user_inds, :]
@@ -222,13 +277,30 @@ class HyperbolicMF:
         return -2 - 2 * U @ V.T
 
     def exp_mu(self, mu, x):
+        assert np.isinf(x).sum() == 0
+        assert np.isnan(x).sum() == 0
         if len(x.shape) == 1:
             x = x.reshape((1, x.shape[0]))
         mask = self.backend.ones(x.shape)
         mask[:, -1] = -1
         prod = (x * x * mask).sum(axis=1, keepdims=True)
+        try:
+            assert np.isinf(prod).sum() == 0
+            assert np.isnan(prod).sum() == 0
+        except:
+            print(x.shape)
+            print(prod)
+            raise Exception()
         squared_norm = self.backend.maximum(prod, self.backend.zeros_like(prod))
         norm_x = self.backend.sqrt(squared_norm)
+        try:
+            assert np.isinf(norm_x).sum() == 0
+            assert np.isnan(norm_x).sum() == 0
+        except:
+            print(x.shape)
+            print(norm_x)
+            raise Exception()
+        # print(norm_x)
         return self.backend.cosh(norm_x) * mu + self.backend.sinh(norm_x) * x / (norm_x + self.op_C)
 
     def draw_from_pseudo_hyperbolic_gaussian(self, shape, sigma, return_gauss=False):
@@ -263,14 +335,14 @@ class HyperbolicMF:
             for j in range(V_n_batches):
                 indices = self.backend.arange(j * batch_size, min((j+1) * batch_size, n_items))
                 self.update_V_row(self.V, relation_matrix, weight_matrix, indices, -1, learning_rate)
-            loss = self.compute_loss(relation_matrix, weight_matrix, 1000).get()
-            iterator.set_description(f'Epoch: {epoch + 1} \t Loss: {float(loss):.4f} \t U grad norm: {float(self.U_grad_norm):.4f} \t V grad norm: {float(self.V_grad_norm):.4f}')
+            loss, U_t, V_t = self.compute_loss(relation_matrix, weight_matrix, 1000)#.get()
+            iterator.set_description(f'Epoch: {epoch + 1} \t Loss: {float(loss):.4f} \t U term: {float(U_t):.4f} \t V term: {float(V_t):.4f}')
             U_norms.append(self.U_grad_norm)
             V_norms.append(self.V_grad_norm)
             self.flush_grad_norms()
-            if U_norms[-1] < stop_criterion and V_norms[-1] < stop_criterion:
-                break
-            losses.append(float(loss))
+            # if U_norms[-1] < stop_criterion and V_norms[-1] < stop_criterion:
+            #     break
+            losses.append(float(loss + U_t + V_t))
             assert not np.isnan(loss)
         return losses, U_norms, V_norms
 
@@ -317,7 +389,7 @@ class NegativeSampler:
         else:
             self.non_zero_rows, self.non_zero_columns = self.data.nonzero()
         
-        self.negative_cols = self.sample_element_wise(self.interactions.indptr.get(), self.interactions.indices.get(), int(self.n_items), neg_samples_multiplier)
+        self.negative_cols = self.sample_element_wise(self.interactions.indptr.get(), self.interactions.indices.get(), int(self.n_items), int(np.ceil(neg_samples_multiplier)))
         self.negative_users = self.backend.broadcast_to(
             self.backend.repeat(
                 self.backend.arange(self.n_users),
